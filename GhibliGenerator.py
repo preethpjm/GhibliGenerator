@@ -1,4 +1,3 @@
-
 import os
 import torch
 import torch.nn as nn
@@ -11,12 +10,33 @@ import streamlit as st
 # ------------------------------
 # Config
 # ------------------------------
-DATASET_PATH = "C:\\Users\\mtab\\Downloads\\Ghibli\\dataset" # local dataset folder
+DATASET_PATH = "C:\\Users\\mtab\\Downloads\\Ghibli\\dataset"
 IMG_SIZE = 256
 BATCH_SIZE = 4
 EPOCHS = 100
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# ------------------------------
+# Utility: Center Crop to Match Aspect Ratio
+# ------------------------------
+def center_crop_to_aspect(image: Image.Image, aspect_ratio=(1, 1), final_size=(256, 256)):
+    width, height = image.size
+    target_aspect = aspect_ratio[0] / aspect_ratio[1]
+
+    if width / height > target_aspect:
+        new_width = int(height * target_aspect)
+        new_height = height
+    else:
+        new_width = width
+        new_height = int(width / target_aspect)
+
+    left = (width - new_width) // 2
+    top = (height - new_height) // 2
+    right = left + new_width
+    bottom = top + new_height
+
+    cropped = image.crop((left, top, right, bottom))
+    return cropped.resize(final_size)
 
 # ------------------------------
 # Dataset Loader
@@ -45,7 +65,6 @@ class GhibliDataset(Dataset):
         g_img = Image.open(self.pairs[idx][1]).convert('RGB').resize((IMG_SIZE, IMG_SIZE))
         return self.transform(o_img), self.transform(g_img)
 
-
 # ------------------------------
 # Generator Model (U-Net)
 # ------------------------------
@@ -61,18 +80,17 @@ class UNetGenerator(nn.Module):
             nn.Conv2d(256, 512, 4, 2, 1), nn.ReLU()
         )
         self.decoder = nn.Sequential(
-           nn.ConvTranspose2d(512, 256, 4, 2, 1), nn.BatchNorm2d(256), nn.ReLU(),      # 16x16 → 32x32
-           nn.ConvTranspose2d(256, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.ReLU(),      # 32x32 → 64x64
-           nn.ConvTranspose2d(128, 64, 4, 2, 1), nn.BatchNorm2d(64), nn.ReLU(),        # 64x64 → 128x128
-           nn.ConvTranspose2d(64, 3, 4, 2, 1), nn.Tanh()                               # 128x128 → 256x256
-       )
+            nn.ConvTranspose2d(512, 256, 4, 2, 1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.ConvTranspose2d(256, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, 4, 2, 1), nn.BatchNorm2d(64), nn.ReLU(),
+            nn.ConvTranspose2d(64, 3, 4, 2, 1), nn.Tanh()
+        )
 
     def forward(self, x):
         x = self.encoder(x)
         x = self.middle(x)
         x = self.decoder(x)
         return x
-
 
 # ------------------------------
 # Training Function
@@ -92,7 +110,7 @@ def train():
     for epoch in range(EPOCHS):
         model.train()
         epoch_loss = 0
-        for i, (o_img, g_img) in enumerate(train_loader):
+        for o_img, g_img in train_loader:
             o_img, g_img = o_img.to(DEVICE), g_img.to(DEVICE)
             optimizer.zero_grad()
             output = model(o_img)
@@ -106,22 +124,20 @@ def train():
     torch.save(model.state_dict(), "ghibli_model.pth")
     print("✅ Training complete. Model saved as `ghibli_model.pth`.")
 
-
 # ------------------------------
 # Inference
 # ------------------------------
 def generate(model, image_path):
-    transform = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ToTensor()
-    ])
-    image = Image.open(image_path).convert('RGB').resize((IMG_SIZE, IMG_SIZE))
-    image_tensor = transform(image).unsqueeze(0).to(DEVICE)
+    image = Image.open(image_path).convert('RGB')
+    cropped = center_crop_to_aspect(image, aspect_ratio=(1, 1), final_size=(IMG_SIZE, IMG_SIZE))
+
+    transform = transforms.ToTensor()
+    image_tensor = transform(cropped).unsqueeze(0).to(DEVICE)
 
     with torch.no_grad():
         output = model(image_tensor).squeeze(0).detach().cpu().clamp(0, 1)
-    return transforms.ToPILImage()(output)
 
+    return transforms.ToPILImage()(output)
 
 # ------------------------------
 # Streamlit UI
@@ -140,13 +156,12 @@ def streamlit_ui():
         result_img = generate(model, uploaded)
         st.image(result_img, caption="Ghibli Style Output", use_column_width=True)
 
-
 # ------------------------------
 # Run
 # ------------------------------
 
 # Uncomment to train
-#train()
+# train()
 
-# Uncomment to run UI
+# Run the Streamlit app
 streamlit_ui()
